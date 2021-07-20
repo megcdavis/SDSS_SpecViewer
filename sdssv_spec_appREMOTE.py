@@ -7,6 +7,10 @@ from astropy.io import fits
 import requests
 import io
 import json
+import numpy as np
+import plotly.express as px
+import plotly.colors
+
 
 ###
 ### input the data directory path 
@@ -74,6 +78,51 @@ def fetch_catID(catID, plate):
             else:
                 continue
     return waves, fluxes, names
+
+### set up color scale
+def get_continuous_color(colorscale, intermed):
+    """
+    Plotly continuous colorscales assign colors to the range [0, 1]. This function computes the intermediate
+    color for any value in that range.
+
+    Plotly doesn't make the colorscales directly accessible in a common format.
+    Some are ready to use:
+    
+        colorscale = plotly.colors.PLOTLY_SCALES["Greens"]
+
+    Others are just swatches that need to be constructed into a colorscale:
+
+        viridis_colors, scale = plotly.colors.convert_colors_to_same_type(plotly.colors.sequential.Viridis)
+        colorscale = plotly.colors.make_colorscale(viridis_colors, scale=scale)
+
+    :param colorscale: A plotly continuous colorscale defined with RGB string colors.
+    :param intermed: value in the range [0, 1]
+    :return: color in rgb string format
+    :rtype: str
+    """
+    if len(colorscale) < 1:
+        raise ValueError("colorscale must have at least one color")
+
+    if intermed <= 0 or len(colorscale) == 1:
+        return colorscale[0][1]
+    if intermed >= 1:
+        return colorscale[-1][1]
+
+    for cutoff, color in colorscale:
+        if intermed > cutoff:
+            low_cutoff, low_color = cutoff, color
+        else:
+            high_cutoff, high_color = cutoff, color
+            break
+
+    # noinspection PyUnboundLocalVariable
+    return plotly.colors.find_intermediate_color(
+        lowcolor=low_color, highcolor=high_color,
+        intermed=((intermed - low_cutoff) / (high_cutoff - low_cutoff)),
+        colortype="rgb")
+
+viridis_colors, _ = plotly.colors.convert_colors_to_same_type(plotly.colors.sequential.Inferno)
+colorscale = plotly.colors.make_colorscale(viridis_colors)
     
 ###
 ### Authentication
@@ -83,7 +132,7 @@ try:
     with open(authen,'r') as i:
         lines = i.readlines()
         username = lines[0][:-1] #there will be a \n on the username
-        password = lines[1]
+        password = lines[1][:-1]
 except: #any error from above will fall through to here.
     print("authentication.txt not provided or incomplete. Please enter authentication.")
     username = input("Enter SDSS-V username:")
@@ -91,7 +140,7 @@ except: #any error from above will fall through to here.
 
 try:
     print("Verifying authentication...")
-    fetch_test = SDSSV_fetch(username, password, 15173,59281, 4350951054)
+    fetch_test = SDSSV_fetch(username, password, 15173, 59281, 4350951054)
     print("Verification successful.")
 except:
     print("Authentication error, please cntrl-c and fix authentication.txt.")
@@ -118,7 +167,13 @@ app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 ### organize by program, plateid, catalogid
 programname = ['SDSS-RM','XMM-LSS','COSMOS','AQMES-Medium','AQMES-Wide']#,'eFEDS1','eFEDS2']
 
-
+### get source info from spAll
+### TODO: make spAll file also remote
+### spAll is huge and takes >30s to download, which seems to break requests.get
+#spAll_url = 'https://data.sdss5.org/sas/sdsswork/bhm/boss/spectro/redux/v6_0_2/spAll-v6_0_2.fits'
+#a = requests.get(spAll_url, auth=(username,password))
+#spAll = fits.open(io.BytesIO(a.content)) ## path to spALL-master file
+spAll = fits.open('./spAll-v6_0_2.fits')
 
 ### 
 ### the webpage layout 
@@ -163,6 +218,7 @@ app.layout = html.Div(className='container',children=[
         dcc.Dropdown(
             id='plateid_dropdown',
             placeholder='Plate ID',
+            value='all',
             #style={'width':'50%','display': 'inline-block'},
         )],style={"width": "33%",'display': 'inline-block'}),
 
@@ -175,6 +231,11 @@ app.layout = html.Div(className='container',children=[
             #style={'width':'50%','display': 'inline-block'},
         )],style={"width": "33%",'display': 'inline-block'}),
 
+        html.Table([
+        html.Tr([html.Td('RA'),html.Td('DEC'),html.Td('z'),html.Td('Class'),html.Td('Subclass')]),
+        html.Tr([html.Td(id='ra'),html.Td(id='dec'),html.Td(id='z'),html.Td(id='mainclass'),html.Td(id='subclass')]),
+        ]),
+
     ]),
 
     ## multiepoch spectra plot
@@ -186,16 +247,21 @@ app.layout = html.Div(className='container',children=[
 
     html.Div([
 
-    	## spectral binning
+        ## spectral binning
         html.Div(children=[
-            html.H4(children=['Binning:'])
+            html.H4(children=['MA Binning:'])
         ],style={"width": "10%",'display': 'inline-block'}),
 
         html.Div(children=[
-            dcc.Input(id="binning_input", type="number", value=5),
-        ],style={"width": "20%",'display': 'inline-block'}), 
+            dcc.Input(id="binning_input", type="number", value=10),
+        ],style={"width": "15%",'display': 'inline-block'}),
+
+    ]),
+
+        html.Div([
 
         ## label important spectral lines
+        
         html.Div(children=[
             html.H4(children=['Lines:'])
         ],style={"width": "10%",'display': 'inline-block'}),   
@@ -205,15 +271,9 @@ app.layout = html.Div(className='container',children=[
                 {'label': i+' ('+str(int(spectral_lines[i][0]))+'A)', 'value': i} for i in spectral_lines.keys()
                 ], 
                 value=list(spectral_lines.keys())),
-        ],style={"width": "60%", 'display': 'inline-block'}),    
+        ],style={"width": "80%", 'display': 'inline-block'}),     
 
     ]),
-   
-    ## TODO: print source information (ra, dec, z, etc...) from some catalog
-    html.Div([
-    	html.H5(id='property_text')
-
-   	 ])
 
 ])
 
@@ -256,18 +316,67 @@ def set_catalogid_value(available_catalogid_options):
 @app.callback(
     Output('spectra_plot','figure'),
     Input('plateid_dropdown', 'value'),
-    Input('catalogid_dropdown', 'value'))
-def make_multiepoch_spectra(selected_designid, selected_catalogid):
+    Input('catalogid_dropdown', 'value'),
+    Input('binning_input', 'value'),
+    Input('line_list', 'value'))
+def make_multiepoch_spectra(selected_designid, selected_catalogid,binning,plot_lines):
     waves, fluxes, names = fetch_catID(selected_catalogid, selected_designid)
+    flux_limit = 0.
 
     fig = go.Figure()
 
     for i in range(0, len(waves)):
-        fig.add_trace(go.Scatter(x=waves[i], y=fluxes[i], name=names[i], \
-                                 opacity = 1./2., mode='lines'))
+        wave_ma = np.convolve(waves[i], np.ones(binning), 'valid') / binning ## moving average
+        flux_ma = np.convolve(fluxes[i], np.ones(binning), 'valid') / binning
+        ind = np.where(np.all([wave_ma<wave_max,wave_ma>wave_min],axis=0))
+        if np.max(flux_ma[ind])>flux_limit: flux_limit = np.max(flux_ma[ind])
+        fig.add_trace(go.Scatter(x=wave_ma[ind], y=flux_ma[ind], name=names[i], \
+                                 opacity = 0.3, mode='lines', \
+                                 line=dict(color=get_continuous_color(colorscale, intermed=i/len(waves)))))
 
-        
+    z_obj = np.median(spAll[1].data['z'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]])
+    for l in plot_lines:
+        for ll in spectral_lines[l]:
+            if ll*(1.+z_obj) > wave_min and ll*(1.+z_obj) < wave_max: 
+                fig.add_vline(x=ll*(1.+z_obj),line_width=1.5,line=dict(dash='dot'),opacity=0.5)
+                fig.add_annotation(x=ll*(1.+z_obj), y=flux_limit,text=l,showarrow=False,xshift=10)
+    
+    fig.update_layout(xaxis = dict(tickmode = 'linear', tick0 = wave_min, dtick = 1000), \
+                      xaxis_tickformat = 'd', yaxis_tickformat = 'd', \
+                      xaxis_title="Wavelength (A)", yaxis_title="Flux (1e-17 erg/cm2/s/A)", legend_title="MJD")
+
     return fig
+
+## calling source info from spAll
+@app.callback(
+    Output('ra', 'children'),
+    Output('dec', 'children'),
+    Output('z', 'children'),
+    Output('mainclass', 'children'),
+    Output('subclass', 'children'),
+    #Output('Simbad','children'),
+    Input('catalogid_dropdown', 'value'))
+def source_info(selected_catalogid):
+    ra_deg = '%.6f' % spAll[1].data['plug_ra'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]][0]
+    dec_deg = '%.6f' % spAll[1].data['plug_dec'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]][0]
+    #coord = SkyCoord(ra_deg,dec_deg,unit='deg')
+    #ra = coord.ra.to_string(u.hour)
+    #dec = coord.dec.to_string(u.deg)
+    z = '%.4f' % np.median(spAll[1].data['z'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]])
+    cl = spAll[1].data['class'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]]
+    scl = spAll[1].data['subclass'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]]
+    mc_values, mc_counts = np.unique(cl[np.where(cl!=' ')], return_counts=True)
+    sc_values, sc_counts = np.unique(scl[np.where(scl!=' ')], return_counts=True)
+    if len(mc_counts)==1:
+        mainclass = mc_values[np.argmax(mc_counts)]
+    else:
+        mainclass = mc_values[np.argmax(mc_counts)]+' ('+mc_values[np.where(np.argsort(mc_counts)==len(mc_counts)-2)[0]]+')'
+    if len(sc_counts)==1:
+        subclass = sc_values[np.argmax(sc_counts)]
+    else:
+        subclass = sc_values[np.argmax(sc_counts)]+' ('+sc_values[np.where(np.argsort(sc_counts)==len(sc_counts)-2)[0]]+')'
+
+    return ra_deg, dec_deg, z, mainclass, subclass#, simbad_link
 
 ### setting the selected epochs for plotting
 # @app.callback(
@@ -288,6 +397,6 @@ def make_multiepoch_spectra(selected_designid, selected_catalogid):
 #     return [{'label':i, 'value':i} for i in epoch]
 
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    app.run_server(debug=True,host="localhost",port=8054)
 
 
