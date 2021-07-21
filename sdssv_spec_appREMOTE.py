@@ -10,7 +10,7 @@ import json
 import numpy as np
 import plotly.express as px
 import plotly.colors
-
+import pandas as pd
 
 ###
 ### input the data directory path 
@@ -58,7 +58,7 @@ def SDSSV_fetch(username, password, plateID, MJD, objID):
     flux = data_test[1].data['FLUX']
     wave = 10**data_test[1].data['loglam']
     return wave, flux 
-   
+'''
 def fetch_catID(catID, plate):
     fluxes = []
     waves = []
@@ -78,6 +78,28 @@ def fetch_catID(catID, plate):
             else:
                 continue
     return waves, fluxes, names
+'''
+def fetch_catID(catID, plate):
+    fluxes = []
+    waves = []
+    names = []
+    for i in catalogIDs[str(catID)]:
+        if plate == "all":
+            dat = SDSSV_fetch(username, password,i[0], i[1], catID)
+            fluxes.append(dat[1])
+            waves.append(dat[0])
+            names.append(i[3])
+        else:
+            if i[0] == plate:
+                dat = SDSSV_fetch(username, password,i[0], i[1], catID)
+                fluxes.append(dat[1])
+                waves.append(dat[0])
+                names.append(i[3])
+            else:
+                continue
+    df = pd.DataFrame(fluxes,index=names,columns=waves[0])
+    df = df.sort_index()
+    return df
 
 ### set up color scale
 def get_continuous_color(colorscale, intermed):
@@ -238,6 +260,8 @@ app.layout = html.Div(className='container',children=[
 
     ]),
 
+    dcc.Store(id='intermediate-value'),
+
     ## multiepoch spectra plot
     dcc.Checklist(
         id="epoch_list",
@@ -275,6 +299,9 @@ app.layout = html.Div(className='container',children=[
 
     ]),
 
+    dcc.Graph(id="residual_plot"),
+
+
 ])
 
 
@@ -311,44 +338,92 @@ def set_plateid_value(available_plateid_options):
 def set_catalogid_value(available_catalogid_options):
     return available_catalogid_options[0]['value']
 
+## get all the spectra data 
+## use DCC store to store data temporarily in browser
+
+@app.callback(
+    Output('intermediate-value', 'data'), 
+    Input('plateid_dropdown', 'value'),
+    Input('catalogid_dropdown', 'value'),)
+def clean_data(selected_designid,selected_catalogid):
+    # some expensive clean data step
+    get_data = fetch_catID(selected_catalogid, selected_designid)
+    # more generally, this line would be
+    # json.dumps(cleaned_df)
+    return get_data.to_json(date_format='iso', orient='split')
 
 ## plotting the spectra
 @app.callback(
     Output('spectra_plot','figure'),
-    Input('plateid_dropdown', 'value'),
+    Input('intermediate-value','data'),
     Input('catalogid_dropdown', 'value'),
     Input('binning_input', 'value'),
     Input('line_list', 'value'))
-def make_multiepoch_spectra(selected_designid, selected_catalogid,binning,plot_lines):
-    waves, fluxes, names = fetch_catID(selected_catalogid, selected_designid)
+def make_multiepoch_spectra(multiepoch_spectra, selected_catalogid, binning, plot_lines):
+    df = pd.read_json(multiepoch_spectra, orient='split')
     flux_limit = 0.
-    names_sort = np.argsort(names)
+    epochs = np.array(df.index)
 
     fig = go.Figure()
 
-    for i in names_sort:
-        wave_ma = np.convolve(waves[i], np.ones(binning), 'valid') / binning ## moving average
-        flux_ma = np.convolve(fluxes[i], np.ones(binning), 'valid') / binning
+    for i in np.array(df.index):
+        wave_ma = np.convolve(np.array(df.columns), np.ones(binning), 'valid') / binning ## moving average
+        flux_ma = np.convolve(df.loc[i], np.ones(binning), 'valid') / binning
         ind = np.where(np.all([wave_ma<wave_max,wave_ma>wave_min],axis=0))
         if np.max(flux_ma[ind])>flux_limit: flux_limit = np.max(flux_ma[ind])
-        fig.add_trace(go.Scatter(x=wave_ma[ind], y=flux_ma[ind], name=int(names[i]), \
+        fig.add_trace(go.Scatter(x=wave_ma[ind], y=flux_ma[ind], name=int(i), \
                                  opacity = 0.3, mode='lines', \
-                                 line=dict(color=get_continuous_color(colorscale, intermed=(names[i]-np.min(names))/(np.max(names)-np.min(names))))))
+                                 line=dict(color=get_continuous_color(colorscale, \
+                                 intermed=(i-np.min(np.array(df.index)))/(np.max(np.array(df.index))-np.min(np.array(df.index))))), \
+                                 ))
 
     z_obj = np.median(spAll[1].data['z'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]])
     for l in plot_lines:
         for ll in spectral_lines[l]:
-            if ll*(1.+z_obj) > wave_min and ll*(1.+z_obj) < wave_max: 
+            if ll*(1.+z_obj) > np.max([wave_min,np.min(np.array(df.columns))]) and ll*(1.+z_obj) < np.min([wave_max,np.max(np.array(df.columns))]): 
                 fig.add_vline(x=ll*(1.+z_obj),line_width=1.5,line=dict(dash='dot'),opacity=0.5)
                 fig.add_annotation(x=ll*(1.+z_obj), y=flux_limit,text=l,showarrow=False,xshift=10)
     
     fig.update_layout(xaxis = dict(tickmode = 'linear', tick0 = wave_min, dtick = 1000), \
                       xaxis_tickformat = 'd', yaxis_tickformat = 'd', \
-                      xaxis_title="Wavelength (A)", yaxis_title="Flux (1e-17 erg/cm2/s/A)", legend_title="MJD")
+                      xaxis_title="Wavelength (A)", yaxis_title="Flux (1e-17 erg/cm2/s/A)", legend_title="MJD", \
+                      )
+
+    return fig
+
+@app.callback(
+    Output('residual_plot','figure'),
+    Input('intermediate-value','data'),
+    Input('catalogid_dropdown', 'value'),
+    Input('binning_input', 'value'),
+    Input('line_list', 'value'))
+def make_multiepoch_spectra(multiepoch_spectra, selected_catalogid , binning, plot_lines):
+    df = pd.read_json(multiepoch_spectra, orient='split')
+    epochs = np.array(df.index)
+
+    allspec = df.values
+    for i in range(allspec.shape[0]):
+        allspec[i,:] = (allspec[i,:]-np.median(allspec,axis=0))#/np.median(allspec,axis=0)
+    #fig = go.Figure()
+    fig = px.imshow(allspec,x=np.array(df.columns),y=np.array(df.index),aspect='auto', \
+        color_continuous_midpoint=0, color_continuous_scale=px.colors.diverging.PRGn)
+
+    
+    z_obj = np.median(spAll[1].data['z'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]])
+    for l in plot_lines:
+        for ll in spectral_lines[l]:
+            if ll*(1.+z_obj) > np.max([wave_min,np.min(np.array(df.columns))]) and ll*(1.+z_obj) < np.min([wave_max,np.max(np.array(df.columns))]): 
+                fig.add_vline(x=ll*(1.+z_obj),line_width=1.5,line=dict(dash='dot'),opacity=0.5)
+                fig.add_annotation(x=ll*(1.+z_obj), y=np.min(epochs)+5.,text=l,showarrow=False,xshift=10)
+    
+    fig.update_layout(xaxis = dict(tickmode = 'linear', tick0 = wave_min, dtick = 1000), \
+                      xaxis_tickformat = 'd', yaxis_tickformat = 'd', \
+                      xaxis_title="Wavelength (A)", yaxis_title="Epoch(MJD)")
 
     return fig
 
 ## calling source info from spAll
+## TO DO: change to calling info from dictionaries.txt
 @app.callback(
     Output('ra', 'children'),
     Output('dec', 'children'),
