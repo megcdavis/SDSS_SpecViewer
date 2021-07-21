@@ -249,7 +249,7 @@ app.layout = html.Div(className='container',children=[
 
         ## spectral binning
         html.Div(children=[
-            html.H4(children=['MA Binning:'])
+            html.H4(children=['Smoothing:'])
         ],style={"width": "10%",'display': 'inline-block'}),
 
         html.Div(children=[
@@ -322,17 +322,18 @@ def set_catalogid_value(available_catalogid_options):
 def make_multiepoch_spectra(selected_designid, selected_catalogid,binning,plot_lines):
     waves, fluxes, names = fetch_catID(selected_catalogid, selected_designid)
     flux_limit = 0.
+    names_sort = np.argsort(names)
 
     fig = go.Figure()
 
-    for i in range(0, len(waves)):
+    for i in names_sort:
         wave_ma = np.convolve(waves[i], np.ones(binning), 'valid') / binning ## moving average
         flux_ma = np.convolve(fluxes[i], np.ones(binning), 'valid') / binning
         ind = np.where(np.all([wave_ma<wave_max,wave_ma>wave_min],axis=0))
         if np.max(flux_ma[ind])>flux_limit: flux_limit = np.max(flux_ma[ind])
-        fig.add_trace(go.Scatter(x=wave_ma[ind], y=flux_ma[ind], name=names[i], \
+        fig.add_trace(go.Scatter(x=wave_ma[ind], y=flux_ma[ind], name=int(names[i]), \
                                  opacity = 0.3, mode='lines', \
-                                 line=dict(color=get_continuous_color(colorscale, intermed=i/len(waves)))))
+                                 line=dict(color=get_continuous_color(colorscale, intermed=(names[i]-np.min(names))/(np.max(names)-np.min(names))))))
 
     z_obj = np.median(spAll[1].data['z'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]])
     for l in plot_lines:
