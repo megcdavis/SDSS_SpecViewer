@@ -11,6 +11,8 @@ import numpy as np
 import plotly.express as px
 import plotly.colors
 import pandas as pd
+from astropy import units as u
+from astropy.coordinates import SkyCoord
 
 ###
 ### input the data directory path 
@@ -58,43 +60,26 @@ def SDSSV_fetch(username, password, plateID, MJD, objID):
     flux = data_test[1].data['FLUX']
     wave = 10**data_test[1].data['loglam']
     return wave, flux 
-'''
+
 def fetch_catID(catID, plate):
     fluxes = []
     waves = []
     names = []
+    #snr1_g = []
     for i in catalogIDs[str(catID)]:
         if plate == "all":
             dat = SDSSV_fetch(username, password,i[0], i[1], catID)
             fluxes.append(dat[1])
             waves.append(dat[0])
             names.append(i[3])
+            #snr1_g.append(i[2])
         else:
             if i[0] == plate:
                 dat = SDSSV_fetch(username, password,i[0], i[1], catID)
                 fluxes.append(dat[1])
                 waves.append(dat[0])
                 names.append(i[3])
-            else:
-                continue
-    return waves, fluxes, names
-'''
-def fetch_catID(catID, plate):
-    fluxes = []
-    waves = []
-    names = []
-    for i in catalogIDs[str(catID)]:
-        if plate == "all":
-            dat = SDSSV_fetch(username, password,i[0], i[1], catID)
-            fluxes.append(dat[1])
-            waves.append(dat[0])
-            names.append(i[3])
-        else:
-            if i[0] == plate:
-                dat = SDSSV_fetch(username, password,i[0], i[1], catID)
-                fluxes.append(dat[1])
-                waves.append(dat[0])
-                names.append(i[3])
+                #snr1_g.append(i[2])
             else:
                 continue
     df = pd.DataFrame(fluxes,index=names,columns=waves[0])
@@ -189,13 +174,6 @@ app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 ### organize by program, plateid, catalogid
 programname = ['SDSS-RM','XMM-LSS','COSMOS','AQMES-Medium','AQMES-Wide']#,'eFEDS1','eFEDS2']
 
-### get source info from spAll
-### TODO: make spAll file also remote
-### spAll is huge and takes >30s to download, which seems to break requests.get
-#spAll_url = 'https://data.sdss5.org/sas/sdsswork/bhm/boss/spectro/redux/v6_0_2/spAll-v6_0_2.fits'
-#a = requests.get(spAll_url, auth=(username,password))
-#spAll = fits.open(io.BytesIO(a.content)) ## path to spALL-master file
-spAll = fits.open('./spAll-v6_0_2.fits')
 
 ### 
 ### the webpage layout 
@@ -254,8 +232,8 @@ app.layout = html.Div(className='container',children=[
         )],style={"width": "33%",'display': 'inline-block'}),
 
         html.Table([
-        html.Tr([html.Td('RA'),html.Td('DEC'),html.Td('z'),html.Td('Class'),html.Td('Subclass')]),
-        html.Tr([html.Td(id='ra'),html.Td(id='dec'),html.Td(id='z'),html.Td(id='mainclass'),html.Td(id='subclass')]),
+        html.Tr([html.Td('R. A.'),html.Td('Dec.'),html.Td('z'),html.Td('Links')]),
+        html.Tr([html.Td(id='ra'),html.Td(id='dec'),html.Td(id='z'),html.Td(dcc.Markdown(id='Simbad'))]),
         ]),
 
     ]),
@@ -274,11 +252,22 @@ app.layout = html.Div(className='container',children=[
         ## spectral binning
         html.Div(children=[
             html.H4(children=['Smoothing:'])
-        ],style={"width": "10%",'display': 'inline-block'}),
+        ],style={"width": "15%",'display': 'inline-block'}),
 
         html.Div(children=[
             dcc.Input(id="binning_input", type="number", value=10),
-        ],style={"width": "15%",'display': 'inline-block'}),
+        ],style={"width": "20%",'display': 'inline-block'}),
+
+        ### TO DO: SNR limit
+        
+        #html.Div(children=[
+        #    html.H4(children=['SNR Limit:'])
+        #],style={"width": "15%",'display': 'inline-block'}),
+
+        #html.Div(children=[
+        #    dcc.Input(id="snrlim_input", type="number", value=10),
+        #],style={"width": "20%",'display': 'inline-block'}),
+        
 
     ]),
 
@@ -358,7 +347,7 @@ def clean_data(selected_designid,selected_catalogid):
     Input('intermediate-value','data'),
     Input('catalogid_dropdown', 'value'),
     Input('binning_input', 'value'),
-    Input('line_list', 'value'))
+    Input('line_list', 'value'),)
 def make_multiepoch_spectra(multiepoch_spectra, selected_catalogid, binning, plot_lines):
     df = pd.read_json(multiepoch_spectra, orient='split')
     flux_limit = 0.
@@ -366,8 +355,8 @@ def make_multiepoch_spectra(multiepoch_spectra, selected_catalogid, binning, plo
 
     fig = go.Figure()
 
+    wave_ma = np.convolve(np.array(df.columns), np.ones(binning), 'valid') / binning ## moving average
     for i in np.array(df.index):
-        wave_ma = np.convolve(np.array(df.columns), np.ones(binning), 'valid') / binning ## moving average
         flux_ma = np.convolve(df.loc[i], np.ones(binning), 'valid') / binning
         ind = np.where(np.all([wave_ma<wave_max,wave_ma>wave_min],axis=0))
         if np.max(flux_ma[ind])>flux_limit: flux_limit = np.max(flux_ma[ind])
@@ -377,7 +366,7 @@ def make_multiepoch_spectra(multiepoch_spectra, selected_catalogid, binning, plo
                                  intermed=(i-np.min(np.array(df.index)))/(np.max(np.array(df.index))-np.min(np.array(df.index))))), \
                                  ))
 
-    z_obj = np.median(spAll[1].data['z'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]])
+    z_obj = catalogIDs[str(selected_catalogid)][0][6]
     for l in plot_lines:
         for ll in spectral_lines[l]:
             if ll*(1.+z_obj) > np.max([wave_min,np.min(np.array(df.columns))]) and ll*(1.+z_obj) < np.min([wave_max,np.max(np.array(df.columns))]): 
@@ -399,26 +388,25 @@ def make_multiepoch_spectra(multiepoch_spectra, selected_catalogid, binning, plo
     Input('line_list', 'value'))
 def make_multiepoch_spectra(multiepoch_spectra, selected_catalogid , binning, plot_lines):
     df = pd.read_json(multiepoch_spectra, orient='split')
-    epochs = np.array(df.index)
 
     allspec = df.values
     for i in range(allspec.shape[0]):
-        allspec[i,:] = (allspec[i,:]-np.median(allspec,axis=0))#/np.median(allspec,axis=0)
+        allspec[i,:] = (allspec[i,:]-np.median(allspec,axis=0))/np.std(allspec,axis=0)
     #fig = go.Figure()
     fig = px.imshow(allspec,x=np.array(df.columns),y=np.array(df.index),aspect='auto', \
-        color_continuous_midpoint=0, color_continuous_scale=px.colors.diverging.PRGn)
+        color_continuous_midpoint=0, color_continuous_scale=px.colors.diverging.PRGn)#,zmin=-10,zmax=10)
 
     
-    z_obj = np.median(spAll[1].data['z'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]])
+    z_obj = catalogIDs[str(selected_catalogid)][0][6]
     for l in plot_lines:
         for ll in spectral_lines[l]:
             if ll*(1.+z_obj) > np.max([wave_min,np.min(np.array(df.columns))]) and ll*(1.+z_obj) < np.min([wave_max,np.max(np.array(df.columns))]): 
                 fig.add_vline(x=ll*(1.+z_obj),line_width=1.5,line=dict(dash='dot'),opacity=0.5)
-                fig.add_annotation(x=ll*(1.+z_obj), y=np.min(epochs)+5.,text=l,showarrow=False,xshift=10)
+                fig.add_annotation(x=ll*(1.+z_obj), y=np.min(np.array(df.index))+5.,text=l,showarrow=False,xshift=10)
     
     fig.update_layout(xaxis = dict(tickmode = 'linear', tick0 = wave_min, dtick = 1000), \
                       xaxis_tickformat = 'd', yaxis_tickformat = 'd', \
-                      xaxis_title="Wavelength (A)", yaxis_title="Epoch(MJD)")
+                      xaxis_title="Wavelength (A)", yaxis_title="Epoch (MJD)")
 
     return fig
 
@@ -428,17 +416,23 @@ def make_multiepoch_spectra(multiepoch_spectra, selected_catalogid , binning, pl
     Output('ra', 'children'),
     Output('dec', 'children'),
     Output('z', 'children'),
-    Output('mainclass', 'children'),
-    Output('subclass', 'children'),
-    #Output('Simbad','children'),
+    #Output('mainclass', 'children'),
+    #Output('subclass', 'children'),
+    Output('Simbad','children'),
     Input('catalogid_dropdown', 'value'))
 def source_info(selected_catalogid):
-    ra_deg = '%.6f' % spAll[1].data['plug_ra'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]][0]
-    dec_deg = '%.6f' % spAll[1].data['plug_dec'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]][0]
-    #coord = SkyCoord(ra_deg,dec_deg,unit='deg')
-    #ra = coord.ra.to_string(u.hour)
-    #dec = coord.dec.to_string(u.deg)
-    z = '%.4f' % np.median(spAll[1].data['z'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]])
+
+    # basic info
+    ra_deg = '%.6f' % catalogIDs[str(selected_catalogid)][0][4]
+    dec_deg = '+%.6f' % catalogIDs[str(selected_catalogid)][0][5]
+    z = '%.4f' % catalogIDs[str(selected_catalogid)][0][6]
+
+    c = SkyCoord(ra=catalogIDs[str(selected_catalogid)][0][4]*u.degree, dec=catalogIDs[str(selected_catalogid)][0][5]*u.degree, frame='icrs')
+    #c_hms = c.to_string('hmsdms')
+    simbad_link = "[Simbad](http://simbad.u-strasbg.fr/simbad/sim-coo?Coord="+ra_deg+dec_deg+"&CooFrame=FK5&CooEpoch=2000&CooEqui=2000&CooDefinedFrames=none&Radius=30&Radius.unit=arcsec&submit=submit+query&CoordList=)"
+
+    ## add object type, subclass, etc...
+    '''
     cl = spAll[1].data['class'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]]
     scl = spAll[1].data['subclass'][np.where(spAll[1].data['catalogid']==selected_catalogid)[0]]
     mc_values, mc_counts = np.unique(cl[np.where(cl!=' ')], return_counts=True)
@@ -451,26 +445,9 @@ def source_info(selected_catalogid):
         subclass = sc_values[np.argmax(sc_counts)]
     else:
         subclass = sc_values[np.argmax(sc_counts)]+' ('+sc_values[np.where(np.argsort(sc_counts)==len(sc_counts)-2)[0]]+')'
+    '''
+    return ra_deg, dec_deg, z, simbad_link#, mainclass, subclass#, simbad_link
 
-    return ra_deg, dec_deg, z, mainclass, subclass#, simbad_link
-
-### setting the selected epochs for plotting
-# @app.callback(
-#     Output('epoch_list','value'),
-#     Input('plateid_dropdown', 'value'),
-#     Input('catalogid_dropdown', 'value'))
-# def set_epoch_value(selected_designid,selected_catalogid):
-#     filename = np.array([])
-#     for i in plateid[selected_designid]:
-#         tmp = glob.glob(dir_spectra+str(i)+'p/coadd/*/spSpec-'+str(i)+'-*-'+str(selected_catalogid).zfill(11)+'.fits')
-#         if len(tmp)>0: 
-#             filename = np.append(filename,tmp,axis=0)
-#     epoch = np.array([])
-#     for f in filename:
-#         mjd = f.split('/')[-2]
-#         plate = f.split('/')[-4][:5]
-#         epoch = np.append(epoch,float(plate)+float(mjd)/1e5)
-#     return [{'label':i, 'value':i} for i in epoch]
 
 if __name__ == '__main__':
     app.run_server(debug=True,host="localhost",port=8054)
