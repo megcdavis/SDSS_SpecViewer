@@ -15,7 +15,7 @@ try:
     with open(authen,'r') as i:
         lines = i.readlines()
         username = lines[0][:-1]
-        password = lines[1]
+        password = lines[1][:-1]
 except: #fails if empty or index out of range
     print("authentication.txt not provided or incomplete. Please enter authentication.")
     username = input("Enter SDSS-V username:")
@@ -35,8 +35,8 @@ except: #fails if the authentication is bad or url is bad!
 #Setting up dictionaries
 
 #programs = {'field':[plateIDs,...], ...}
-programs = {'SDSS-RM':[15171, 15172, 15173, "all"],'XMM-LSS':[15000, 15002, "all"],
-            'COSMOS':[15038, 15070, 15071, 15252, 15253, "all"]}
+programs = {'SDSS-RM':[15171, 15172, 15173,"all"],'XMM-LSS':[15000, 15002,"all"],
+            'COSMOS':[15038, 15070, 15071, 15252, 15253,"all"]}
 
 #Sorting out AQMES plates and adding the "all" option
 AQWIDE = (spAll[1].data["PROGRAMNAME"] == 'AQMES-Wide') & (spAll[1].data["OBJTYPE"] == 'QSO')
@@ -95,7 +95,8 @@ for k in np.unique(spAll[1].data['CATALOGID'][mask]):
     all_mjds = [] 
     for m in np.where(spAll[1].data['CATALOGID'][mask] == k)[0]:
         one_mjd = [int(spAll[1].data['PLATE'][mask][m]), int(spAll[1].data['MJD'][mask][m]), \
-                   float(spAll[1].data['SPEC1_G'][mask][m]), float(spAll[1].data['MJD_FINAL'][mask][m])]
+                   float(spAll[1].data['SPEC1_G'][mask][m]), float(spAll[1].data['MJD_FINAL'][mask][m]), \
+                   float(spAll[1].data['plug_ra'][mask][m]),float(spAll[1].data['plug_dec'][mask][m]),float(spAll[1].data['z'][mask][m])]
         all_mjds.append(one_mjd)
     #store one catIDs info in dict.    
     catalogIDs[int(k)] = all_mjds
