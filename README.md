@@ -27,13 +27,13 @@ The `dictionaries.txt` file is the backbone to this tool. By running the `update
 
 # Features to be added
 - include previous spectra from SDSS I-IV, provide downloadable links to all data
-- include quick links to other databases (Simbad, Ned, etc...)
-- include source information summary (RA, Dec, z, source types...)
+- include quick links to other databases (Simbad, Ned, etc...) (v)
+- include source information summary (RA, Dec, z, source types...) (v)
 - search with RA/Dec for objects
 - renormalization of spectra (based on specific wavelength or line)
-- smoothing of spectra
-- show the residual spectra in greyscale (could add as a second figure)
+- smoothing of spectra (v)
+- show the residual spectra in greyscale (could add as a second figure) (v)
 - optimize the loading speed
 - add session history
 - S/N selection slider bar
-- Fix colors
+- Fix colors (v)
